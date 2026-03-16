@@ -43,3 +43,10 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 - `docker compose build`
 - `docker compose run --rm dev python -c "from openvino import Core; print(Core().available_devices)"`
 - `docker compose run --rm dev python scripts/bootstrap_model.py`
+- `docker compose run --rm dev python scripts/transcribe_file.py https://raw.githubusercontent.com/FluidInference/eddy-audio/main/assets/audio/first_10_seconds.wav`
+
+## Current Smoke-Test Limits
+
+- `scripts/transcribe_file.py` is only for the first dev inference check
+- It supports short audio only for now: up to `240000` samples after `ffmpeg` resampling, which is about `15` seconds at `16kHz` mono
+- Long-audio chunking and API work come later
