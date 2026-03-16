@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import threading
 import time
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from openvino import Core
 
 DEFAULT_MODEL_DIR = "/opt/models/parakeet-tdt-0.6b-v3-ov"
 DEFAULT_DEVICE = "CPU"
+SAMPLE_RATE = 16000
 BLANK_TOKEN_ID = 8192
 DURATION_BINS = (0, 1, 2, 3, 4)
 MAX_PREPROCESSOR_SAMPLES = 240000
@@ -20,6 +23,10 @@ MEL_BINS = 128
 ENCODER_HIDDEN_SIZE = 1024
 DECODER_HIDDEN_SIZE = 640
 DEFAULT_MAX_TOKENS = 256
+SILENCE_TRIM_FRAME_SAMPLES = 160
+SILENCE_TRIM_PAD_SAMPLES = 1600
+SILENCE_TRIM_MIN_RMS = 0.001
+SILENCE_TRIM_PEAK_RATIO = 0.1
 
 
 class TranscriptionError(RuntimeError):
@@ -84,7 +91,83 @@ def _run_ffmpeg(cmd: list[str], stdin: bytes | None = None) -> np.ndarray:
     return audio
 
 
+def _is_wav_bytes(audio_bytes: bytes) -> bool:
+    return len(audio_bytes) >= 12 and audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE"
+
+
+def _decode_pcm_samples(frames: bytes, sample_width: int) -> np.ndarray:
+    if sample_width == 1:
+        audio = np.frombuffer(frames, dtype=np.uint8).astype(np.float32)
+        return (audio - 128.0) / 128.0
+
+    if sample_width == 2:
+        return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
+
+    if sample_width == 3:
+        raw = np.frombuffer(frames, dtype=np.uint8)
+        if raw.size % 3 != 0:
+            raise AudioDecodeError("unsupported 24-bit WAV payload length")
+
+        raw = raw.reshape(-1, 3)
+        audio = (
+            raw[:, 0].astype(np.int32)
+            | (raw[:, 1].astype(np.int32) << 8)
+            | (raw[:, 2].astype(np.int32) << 16)
+        )
+        sign_bit = 1 << 23
+        audio = (audio ^ sign_bit) - sign_bit
+        return audio.astype(np.float32) / float(sign_bit)
+
+    if sample_width == 4:
+        return np.frombuffer(frames, dtype="<i4").astype(np.float32) / 2147483648.0
+
+    raise AudioDecodeError(f"unsupported WAV sample width: {sample_width} bytes")
+
+
+def _resample_audio(audio: np.ndarray, input_sample_rate: int, output_sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+    if audio.size == 0 or input_sample_rate == output_sample_rate:
+        return np.ascontiguousarray(audio, dtype=np.float32)
+
+    target_size = max(1, int(round(audio.size * output_sample_rate / input_sample_rate)))
+    source_positions = np.arange(audio.size, dtype=np.float64)
+    target_positions = np.arange(target_size, dtype=np.float64) * input_sample_rate / output_sample_rate
+    target_positions = np.clip(target_positions, 0.0, max(0.0, audio.size - 1))
+    return np.interp(target_positions, source_positions, audio).astype(np.float32)
+
+
+def load_audio_from_wav_bytes(audio_bytes: bytes) -> np.ndarray:
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            sample_rate = wav_file.getframerate()
+            frame_count = wav_file.getnframes()
+            frames = wav_file.readframes(frame_count)
+    except (wave.Error, EOFError) as exc:
+        raise AudioDecodeError(f"failed to parse WAV audio: {exc}") from exc
+
+    if channels <= 0:
+        raise AudioDecodeError("WAV file has no channels")
+    if sample_rate <= 0:
+        raise AudioDecodeError("WAV file has an invalid sample rate")
+
+    audio = _decode_pcm_samples(frames, sample_width)
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1, dtype=np.float32)
+
+    return _resample_audio(audio, sample_rate)
+
+
 def load_audio_from_source(source: str) -> np.ndarray:
+    source_path = Path(source)
+    if source_path.is_file():
+        audio_bytes = source_path.read_bytes()
+        if _is_wav_bytes(audio_bytes):
+            try:
+                return load_audio_from_wav_bytes(audio_bytes)
+            except AudioDecodeError:
+                pass
+
     cmd = [
         "ffmpeg",
         "-nostdin",
@@ -99,13 +182,19 @@ def load_audio_from_source(source: str) -> np.ndarray:
         "-ac",
         "1",
         "-ar",
-        "16000",
+        str(SAMPLE_RATE),
         "-",
     ]
     return _run_ffmpeg(cmd)
 
 
 def load_audio_from_bytes(audio_bytes: bytes) -> np.ndarray:
+    if _is_wav_bytes(audio_bytes):
+        try:
+            return load_audio_from_wav_bytes(audio_bytes)
+        except AudioDecodeError:
+            pass
+
     cmd = [
         "ffmpeg",
         "-loglevel",
@@ -119,10 +208,38 @@ def load_audio_from_bytes(audio_bytes: bytes) -> np.ndarray:
         "-ac",
         "1",
         "-ar",
-        "16000",
+        str(SAMPLE_RATE),
         "-",
     ]
     return _run_ffmpeg(cmd, stdin=audio_bytes)
+
+
+def trim_silence(audio: np.ndarray) -> np.ndarray:
+    audio = np.ascontiguousarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return audio
+
+    frame_size = SILENCE_TRIM_FRAME_SAMPLES
+    padded_size = int(np.ceil(audio.size / frame_size) * frame_size)
+    if padded_size != audio.size:
+        padded_audio = np.pad(audio, (0, padded_size - audio.size))
+    else:
+        padded_audio = audio
+
+    frames = padded_audio.reshape(-1, frame_size)
+    frame_rms = np.sqrt(np.mean(np.square(frames, dtype=np.float32), axis=1))
+    peak_rms = float(frame_rms.max(initial=0.0))
+    if peak_rms <= 0.0:
+        return audio[:0]
+
+    threshold = max(SILENCE_TRIM_MIN_RMS, peak_rms * SILENCE_TRIM_PEAK_RATIO)
+    active_frames = np.flatnonzero(frame_rms >= threshold)
+    if active_frames.size == 0:
+        return audio[:0]
+
+    start = max(0, int(active_frames[0] * frame_size) - SILENCE_TRIM_PAD_SAMPLES)
+    end = min(audio.size, int((active_frames[-1] + 1) * frame_size) + SILENCE_TRIM_PAD_SAMPLES)
+    return np.ascontiguousarray(audio[start:end], dtype=np.float32)
 
 
 def load_vocab(path: Path, blank_token_id: int) -> list[str]:
@@ -351,6 +468,7 @@ class ParakeetTranscriber:
         self._loaded: LoadedParakeet | None = None
         self._load_seconds = 0.0
         self._lock = threading.Lock()
+        self._bundle_local = threading.local()
 
     @property
     def model_load_seconds(self) -> float:
@@ -368,16 +486,34 @@ class ParakeetTranscriber:
 
         return self._loaded
 
+    def _get_infer_bundle(self) -> InferBundle:
+        loaded = self.load()
+        bundle = getattr(self._bundle_local, "bundle", None)
+        if bundle is None or getattr(self._bundle_local, "loaded_id", None) != id(loaded):
+            bundle = create_infer_bundle(loaded)
+            self._bundle_local.bundle = bundle
+            self._bundle_local.loaded_id = id(loaded)
+        return bundle
+
     def transcribe_audio(self, audio: np.ndarray, max_tokens: int = DEFAULT_MAX_TOKENS) -> TranscriptionResult:
-        bundle = create_infer_bundle(self.load())
+        original_duration_seconds = audio.size / SAMPLE_RATE
+        trimmed_audio = trim_silence(audio)
+        if trimmed_audio.size == 0:
+            return TranscriptionResult(
+                text="",
+                audio_duration_seconds=original_duration_seconds,
+                inference_seconds=0.0,
+                rtfx=0.0,
+            )
+
+        bundle = self._get_infer_bundle()
         started = time.perf_counter()
-        text = transcribe_short_audio(bundle, audio, max_tokens)
+        text = transcribe_short_audio(bundle, trimmed_audio, max_tokens)
         inference_seconds = time.perf_counter() - started
-        audio_duration_seconds = audio.size / 16000.0
-        rtfx = audio_duration_seconds / inference_seconds if inference_seconds > 0 else 0.0
+        rtfx = original_duration_seconds / inference_seconds if inference_seconds > 0 else 0.0
         return TranscriptionResult(
             text=text,
-            audio_duration_seconds=audio_duration_seconds,
+            audio_duration_seconds=original_duration_seconds,
             inference_seconds=inference_seconds,
             rtfx=rtfx,
         )
@@ -387,4 +523,3 @@ class ParakeetTranscriber:
 
     def transcribe_bytes(self, audio_bytes: bytes, max_tokens: int = DEFAULT_MAX_TOKENS) -> TranscriptionResult:
         return self.transcribe_audio(load_audio_from_bytes(audio_bytes), max_tokens=max_tokens)
-
