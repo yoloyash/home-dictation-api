@@ -75,6 +75,11 @@ def resolve_device(device: str | None = None) -> str:
     return device or os.environ.get("OPENVINO_DEVICE", DEFAULT_DEVICE)
 
 
+def should_trim_silence() -> bool:
+    value = os.environ.get("TRIM_SILENCE", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def _run_ffmpeg(cmd: list[str], stdin: bytes | None = None) -> np.ndarray:
     try:
         result = subprocess.run(cmd, input=stdin, check=True, capture_output=True)
@@ -497,7 +502,7 @@ class ParakeetTranscriber:
 
     def transcribe_audio(self, audio: np.ndarray, max_tokens: int = DEFAULT_MAX_TOKENS) -> TranscriptionResult:
         original_duration_seconds = audio.size / SAMPLE_RATE
-        trimmed_audio = trim_silence(audio)
+        trimmed_audio = trim_silence(audio) if should_trim_silence() else np.ascontiguousarray(audio)
         if trimmed_audio.size == 0:
             return TranscriptionResult(
                 text="",

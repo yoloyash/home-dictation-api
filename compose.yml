@@ -13,6 +13,7 @@ services:
       MODEL_ROOT: ${MODEL_ROOT:-/opt/models}
       MODEL_DIR: ${MODEL_DIR:-/opt/models/parakeet-tdt-0.6b-v3-ov}
       OPENVINO_DEVICE: ${OPENVINO_DEVICE:-CPU}
+      TRIM_SILENCE: ${TRIM_SILENCE:-1}
       API_KEY: ${API_KEY:-}
       PUBLIC_MODEL_NAME: ${PUBLIC_MODEL_NAME:-whisper-1}
       PYTHONPATH: /workspace/src
