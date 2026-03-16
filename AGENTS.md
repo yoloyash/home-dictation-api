@@ -12,6 +12,7 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 - Model: `FluidInference/parakeet-tdt-0.6b-v3-ov`
 - Client: `OpenWhispr`
 - API shape: OpenAI-compatible `POST /v1/audio/transcriptions`
+- Model alias for compatibility: `whisper-1`
 - Network plan: LAN first, remote access later
 - First client targets: macOS and Windows
 
@@ -41,12 +42,25 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 
 - `cp .env.example .env`
 - `docker compose build`
+- `docker compose up`
+- `curl http://localhost:8080/healthz`
+- `curl http://localhost:8080/v1/models`
+- `curl -X POST http://localhost:8080/v1/audio/transcriptions -F file=@/tmp/sample.wav -F model=whisper-1`
 - `docker compose run --rm dev python -c "from openvino import Core; print(Core().available_devices)"`
 - `docker compose run --rm dev python scripts/bootstrap_model.py`
 - `docker compose run --rm dev python scripts/transcribe_file.py https://raw.githubusercontent.com/FluidInference/eddy-audio/main/assets/audio/first_10_seconds.wav`
 
+## Current API Contract
+
+- Base URL for OpenWhispr custom transcription should be `http://<host>:<port>/v1`
+- Primary endpoint is `POST /v1/audio/transcriptions`
+- Request fields aligned to OpenWhispr's custom endpoint flow: `file`, `model`, optional `language`, optional `prompt`
+- Response shape is JSON with a top-level `text`
+- `GET /v1/models` exposes `whisper-1` for compatibility
+- If `API_KEY` is set, send it as `Authorization: Bearer <key>`
+
 ## Current Smoke-Test Limits
 
-- `scripts/transcribe_file.py` is only for the first dev inference check
-- It supports short audio only for now: up to `240000` samples after `ffmpeg` resampling, which is about `15` seconds at `16kHz` mono
-- Long-audio chunking and API work come later
+- `scripts/transcribe_file.py` and the v0 API both use the same short-audio path right now
+- They support short audio only for now: up to `240000` samples after `ffmpeg` resampling, which is about `15` seconds at `16kHz` mono
+- Long-audio chunking comes later

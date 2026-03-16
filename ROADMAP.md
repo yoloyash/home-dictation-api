@@ -7,16 +7,16 @@
 - [x] Short-audio inference smoke test
 - [x] Run real dictation samples from your machine and judge quality/latency
 - [x] Decide go/no-go on this model/runtime after a few real tests
+- [x] Add a minimal CLI contract for repeatable local testing
+- [x] Build the thinnest possible OpenAI-style transcription endpoint
+- [x] Make the endpoint compatible enough for `OpenWhispr`
+- [x] Add basic auth via env key
+- [x] Add one or two smoke tests for bootstrap + transcription + API
+- [ ] Test end-to-end with `OpenWhispr` on macOS <- you are here
+- [ ] Test end-to-end with `OpenWhispr` on Windows
 - [ ] Add longer-audio support via chunking/windowing
 - [ ] Clean up transcript output behavior for real dictation cases
-- [ ] Add a minimal CLI contract for repeatable local testing
-- [ ] Build the thinnest possible OpenAI-style transcription endpoint
-- [ ] Make the endpoint compatible enough for `OpenWhispr`
-- [ ] Add basic auth via env key
-- [ ] Add one or two smoke tests for bootstrap + transcription + API
 - [ ] Add simple benchmark script/report for latency and throughput
-- [ ] Test end-to-end with `OpenWhispr` on macOS
-- [ ] Test end-to-end with `OpenWhispr` on Windows
 - [ ] Fix any client compatibility issues
 - [ ] Add basic logging and error handling
 - [ ] Add Docker run instructions cleanup in `AGENTS.md`

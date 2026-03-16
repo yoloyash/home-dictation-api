@@ -6,7 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     HF_HOME=/opt/hf-cache \
-    MODEL_ROOT=/opt/models
+    MODEL_ROOT=/opt/models \
+    PYTHONPATH=/workspace/src
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -14,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install huggingface_hub openvino
+RUN python -m pip install fastapi httpx huggingface_hub openvino pytest python-multipart uvicorn
 
 WORKDIR /workspace
 

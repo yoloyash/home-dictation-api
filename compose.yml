@@ -12,11 +12,17 @@ services:
       HF_HOME: ${HF_HOME:-/opt/hf-cache}
       MODEL_ROOT: ${MODEL_ROOT:-/opt/models}
       MODEL_DIR: ${MODEL_DIR:-/opt/models/parakeet-tdt-0.6b-v3-ov}
+      OPENVINO_DEVICE: ${OPENVINO_DEVICE:-CPU}
+      API_KEY: ${API_KEY:-}
+      PUBLIC_MODEL_NAME: ${PUBLIC_MODEL_NAME:-whisper-1}
+      PYTHONPATH: /workspace/src
+    ports:
+      - "${API_PORT:-8080}:8080"
     volumes:
       - .:/workspace
       - hf-cache:/opt/hf-cache
       - model-store:/opt/models
-    command: ["sleep", "infinity"]
+    command: ["uvicorn", "home_dictation_api.api:app", "--host", "0.0.0.0", "--port", "8080"]
     stdin_open: true
     tty: true
 
