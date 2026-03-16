@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install openvino
+RUN python -m pip install huggingface_hub openvino
 
 WORKDIR /workspace
 

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repo is intentionally small and early-stage. Keep changes simple and directly aligned with the current README.
+This repo is intentionally small and early-stage. Keep changes simple and treat this file as the current project doc.
 
 ## Project Goal
 
@@ -35,3 +35,11 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 - Prefer direct, readable code over premature architecture
 - Use `docker compose` for local development
 - Update `AGENTS.md` if the direction or setup changes
+- Do not rely on `README.md` for current setup notes
+
+## Current Dev Commands
+
+- `cp .env.example .env`
+- `docker compose build`
+- `docker compose run --rm dev python -c "from openvino import Core; print(Core().available_devices)"`
+- `docker compose run --rm dev python scripts/bootstrap_model.py`

@@ -8,6 +8,7 @@ services:
     working_dir: /workspace
     environment:
       MODEL_ID: ${MODEL_ID:-FluidInference/parakeet-tdt-0.6b-v3-ov}
+      MODEL_REVISION: ${MODEL_REVISION:-dfd55eb6c85a9a8546a162bed84784245d5743c2}
       HF_HOME: ${HF_HOME:-/opt/hf-cache}
       MODEL_ROOT: ${MODEL_ROOT:-/opt/models}
       MODEL_DIR: ${MODEL_DIR:-/opt/models/parakeet-tdt-0.6b-v3-ov}
