@@ -1,0 +1,24 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: home-dictation-api:dev
+    init: true
+    working_dir: /workspace
+    environment:
+      MODEL_ID: ${MODEL_ID:-FluidInference/parakeet-tdt-0.6b-v3-ov}
+      HF_HOME: ${HF_HOME:-/opt/hf-cache}
+      MODEL_ROOT: ${MODEL_ROOT:-/opt/models}
+      MODEL_DIR: ${MODEL_DIR:-/opt/models/parakeet-tdt-0.6b-v3-ov}
+    volumes:
+      - .:/workspace
+      - hf-cache:/opt/hf-cache
+      - model-store:/opt/models
+    command: ["sleep", "infinity"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  hf-cache:
+  model-store:
