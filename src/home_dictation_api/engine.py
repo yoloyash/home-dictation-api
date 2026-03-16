@@ -3,13 +3,14 @@ from __future__ import annotations
 import io
 import json
 import os
-import subprocess
 import threading
 import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+import av
+import httpx
 import numpy as np
 from openvino import Core
 
@@ -34,7 +35,7 @@ class TranscriptionError(RuntimeError):
 
 
 class AudioDecodeError(TranscriptionError):
-    """Raised when ffmpeg cannot decode the provided audio."""
+    """Raised when audio cannot be decoded into the model input format."""
 
 
 class AudioTooLongError(TranscriptionError):
@@ -78,22 +79,6 @@ def resolve_device(device: str | None = None) -> str:
 def should_trim_silence() -> bool:
     value = os.environ.get("TRIM_SILENCE", "1").strip().lower()
     return value not in {"0", "false", "no", "off"}
-
-
-def _run_ffmpeg(cmd: list[str], stdin: bytes | None = None) -> np.ndarray:
-    try:
-        result = subprocess.run(cmd, input=stdin, check=True, capture_output=True)
-    except FileNotFoundError as exc:
-        raise AudioDecodeError("ffmpeg is required but was not found in PATH") from exc
-    except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.decode("utf-8", errors="replace").strip()
-        raise AudioDecodeError(f"ffmpeg failed to decode audio: {stderr}") from exc
-
-    audio = np.frombuffer(result.stdout, dtype=np.float32)
-    if audio.size == 0:
-        raise AudioDecodeError("decoded audio buffer is empty")
-
-    return audio
 
 
 def _is_wav_bytes(audio_bytes: bytes) -> bool:
@@ -163,34 +148,82 @@ def load_audio_from_wav_bytes(audio_bytes: bytes) -> np.ndarray:
     return _resample_audio(audio, sample_rate)
 
 
-def load_audio_from_source(source: str) -> np.ndarray:
-    source_path = Path(source)
-    if source_path.is_file():
-        audio_bytes = source_path.read_bytes()
-        if _is_wav_bytes(audio_bytes):
-            try:
-                return load_audio_from_wav_bytes(audio_bytes)
-            except AudioDecodeError:
-                pass
+def _normalize_pyav_audio(frame: av.AudioFrame) -> np.ndarray:
+    audio = np.asarray(frame.to_ndarray())
+    if np.issubdtype(audio.dtype, np.integer):
+        info = np.iinfo(audio.dtype)
+        max_value = float(max(abs(info.min), info.max))
+        audio = audio.astype(np.float32) / max_value
+    else:
+        audio = audio.astype(np.float32, copy=False)
 
-    cmd = [
-        "ffmpeg",
-        "-nostdin",
-        "-loglevel",
-        "error",
-        "-i",
-        source,
-        "-f",
-        "f32le",
-        "-acodec",
-        "pcm_f32le",
-        "-ac",
-        "1",
-        "-ar",
-        str(SAMPLE_RATE),
-        "-",
-    ]
-    return _run_ffmpeg(cmd)
+    if audio.ndim == 2:
+        audio = audio.mean(axis=0, dtype=np.float32)
+
+    return np.ascontiguousarray(audio, dtype=np.float32)
+
+
+def _iter_resampled_frames(result: object) -> list[av.AudioFrame]:
+    if result is None:
+        return []
+    if isinstance(result, list):
+        return [frame for frame in result if frame is not None]
+    return [result] if result is not None else []
+
+
+def _load_audio_from_pyav_input(source: str | io.BytesIO) -> np.ndarray:
+    try:
+        with av.open(source) as container:
+            audio_stream = next((stream for stream in container.streams if stream.type == "audio"), None)
+            if audio_stream is None:
+                raise AudioDecodeError("input does not contain an audio stream")
+
+            resampler = av.audio.resampler.AudioResampler(format="fltp", layout="mono", rate=SAMPLE_RATE)
+            chunks: list[np.ndarray] = []
+
+            for frame in container.decode(audio=audio_stream.index):
+                for resampled_frame in _iter_resampled_frames(resampler.resample(frame)):
+                    chunk = _normalize_pyav_audio(resampled_frame)
+                    if chunk.size > 0:
+                        chunks.append(chunk)
+
+            for resampled_frame in _iter_resampled_frames(resampler.resample(None)):
+                chunk = _normalize_pyav_audio(resampled_frame)
+                if chunk.size > 0:
+                    chunks.append(chunk)
+    except AudioDecodeError:
+        raise
+    except Exception as exc:
+        raise AudioDecodeError(f"PyAV failed to decode audio: {exc}") from exc
+
+    if not chunks:
+        raise AudioDecodeError("decoded audio buffer is empty")
+
+    return np.ascontiguousarray(np.concatenate(chunks), dtype=np.float32)
+
+
+def _download_audio_bytes(url: str) -> bytes:
+    try:
+        response = httpx.get(url, follow_redirects=True, timeout=30.0)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise AudioDecodeError(f"failed to download audio: {exc}") from exc
+
+    if not response.content:
+        raise AudioDecodeError("downloaded audio file is empty")
+
+    return response.content
+
+
+def load_audio_from_source(source: str) -> np.ndarray:
+    if source.startswith(("http://", "https://")):
+        return load_audio_from_bytes(_download_audio_bytes(source))
+
+    source_path = Path(source)
+    if not source_path.is_file():
+        raise AudioDecodeError(f"audio source does not exist: {source}")
+
+    return load_audio_from_bytes(source_path.read_bytes())
 
 
 def load_audio_from_bytes(audio_bytes: bytes) -> np.ndarray:
@@ -200,23 +233,7 @@ def load_audio_from_bytes(audio_bytes: bytes) -> np.ndarray:
         except AudioDecodeError:
             pass
 
-    cmd = [
-        "ffmpeg",
-        "-loglevel",
-        "error",
-        "-i",
-        "pipe:0",
-        "-f",
-        "f32le",
-        "-acodec",
-        "pcm_f32le",
-        "-ac",
-        "1",
-        "-ar",
-        str(SAMPLE_RATE),
-        "-",
-    ]
-    return _run_ffmpeg(cmd, stdin=audio_bytes)
+    return _load_audio_from_pyav_input(io.BytesIO(audio_bytes))
 
 
 def trim_silence(audio: np.ndarray) -> np.ndarray:

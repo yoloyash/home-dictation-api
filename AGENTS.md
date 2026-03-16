@@ -62,5 +62,5 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 ## Current Smoke-Test Limits
 
 - `scripts/transcribe_file.py` and the v0 API both use the same short-audio path right now
-- They support short audio only for now: up to `240000` samples after `ffmpeg` resampling, which is about `15` seconds at `16kHz` mono
+- They support short audio only for now: up to `240000` samples after decode/resampling, which is about `15` seconds at `16kHz` mono
 - Long-audio chunking comes later

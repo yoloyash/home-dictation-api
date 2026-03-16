@@ -11,11 +11,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    ffmpeg \
     tini \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install fastapi httpx huggingface_hub openvino pytest python-multipart uvicorn
+RUN python -m pip install av fastapi httpx huggingface_hub openvino pytest python-multipart uvicorn
 
 WORKDIR /workspace
 

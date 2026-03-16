@@ -14,7 +14,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Transcribe a short audio file with the OpenVINO Parakeet smoke-test pipeline.",
     )
-    parser.add_argument("audio", help="Local audio path or URL supported by ffmpeg")
+    parser.add_argument("audio", help="Local audio path or HTTP(S) URL")
     parser.add_argument(
         "--device",
         default=os.environ.get("OPENVINO_DEVICE", DEFAULT_DEVICE),
