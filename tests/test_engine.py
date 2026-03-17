@@ -4,6 +4,7 @@ import io
 import wave
 
 import numpy as np
+import pytest
 
 from home_dictation_api import engine
 
@@ -48,6 +49,50 @@ def test_load_audio_from_bytes_uses_pyav_for_non_wav(monkeypatch) -> None:
     np.testing.assert_allclose(decoded, np.array([0.125], dtype=np.float32))
     assert len(calls) == 1
     assert calls[0].read() == b"not-a-wav"
+
+
+def test_load_audio_from_wav_bytes_rejects_clips_over_short_audio_limit() -> None:
+    samples = np.zeros(engine.MAX_PREPROCESSOR_SAMPLES + 1, dtype=np.float32)
+
+    with pytest.raises(engine.AudioTooLongError):
+        engine.load_audio_from_bytes(make_wav_bytes(samples))
+
+
+def test_load_audio_from_pyav_input_rejects_clips_over_short_audio_limit(monkeypatch) -> None:
+    class FakeAudioStream:
+        type = "audio"
+        index = 0
+
+    class FakeContainer:
+        streams = [FakeAudioStream()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def decode(self, audio=None):
+            yield object()
+            yield object()
+
+    class FakeResampler:
+        def resample(self, frame):
+            if frame is None:
+                return []
+            return [frame]
+
+    chunks = [
+        np.zeros(engine.MAX_PREPROCESSOR_SAMPLES, dtype=np.float32),
+        np.zeros(1, dtype=np.float32),
+    ]
+
+    monkeypatch.setattr(engine.av, "open", lambda source: FakeContainer())
+    monkeypatch.setattr(engine.av.audio.resampler, "AudioResampler", lambda format, layout, rate: FakeResampler())
+    monkeypatch.setattr(engine, "_normalize_pyav_audio", lambda frame: chunks.pop(0))
+
+    with pytest.raises(engine.AudioTooLongError):
+        engine._load_audio_from_pyav_input(io.BytesIO(b"encoded"))
 
 
 def test_load_audio_from_source_downloads_urls(monkeypatch) -> None:

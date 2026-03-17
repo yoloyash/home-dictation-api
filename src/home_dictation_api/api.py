@@ -7,10 +7,14 @@ from dataclasses import asdict
 from typing import Protocol
 
 from fastapi import Depends, FastAPI, File, Form, Header, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from home_dictation_api.engine import AudioDecodeError, AudioTooLongError, ParakeetTranscriber, TranscriptionError
+
+DEFAULT_MAX_UPLOAD_BYTES = 16 * 1024 * 1024
+UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 
 
 class TranscriberProtocol(Protocol):
@@ -50,6 +54,36 @@ def get_public_model_name() -> str:
 def should_preload_model() -> bool:
     value = os.environ.get("PRELOAD_MODEL", "1").strip().lower()
     return value not in {"0", "false", "no", "off"}
+
+
+def get_max_upload_bytes() -> int:
+    value = os.environ.get("MAX_UPLOAD_BYTES", str(DEFAULT_MAX_UPLOAD_BYTES)).strip()
+    max_upload_bytes = int(value)
+    if max_upload_bytes <= 0:
+        raise RuntimeError("MAX_UPLOAD_BYTES must be a positive integer")
+    return max_upload_bytes
+
+
+async def read_upload_bytes(file: UploadFile, max_upload_bytes: int) -> bytes:
+    chunks = bytearray()
+    total_bytes = 0
+
+    while True:
+        chunk = await file.read(UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+
+        total_bytes += len(chunk)
+        if total_bytes > max_upload_bytes:
+            raise OpenAIAPIError(
+                status_code=400,
+                message=f"Uploaded audio file is too large ({total_bytes} bytes, max {max_upload_bytes} bytes).",
+                param="file",
+            )
+
+        chunks.extend(chunk)
+
+    return bytes(chunks)
 
 
 def create_app(
@@ -193,7 +227,7 @@ def create_app(
         stream: str | None = Form(default=None),
         transcriber: TranscriberProtocol = Depends(get_transcriber),
     ):
-        del model, language, prompt, stream
+        del language, prompt, stream
 
         if not file.filename:
             raise OpenAIAPIError(
@@ -202,7 +236,16 @@ def create_app(
                 param="file",
             )
 
-        audio_bytes = await file.read()
+        public_model_name = get_public_model_name()
+        if model != public_model_name:
+            raise OpenAIAPIError(
+                status_code=404,
+                message=f"The model `{model}` does not exist.",
+                error_type="invalid_request_error",
+                code="model_not_found",
+            )
+
+        audio_bytes = await read_upload_bytes(file, get_max_upload_bytes())
         if not audio_bytes:
             raise OpenAIAPIError(
                 status_code=400,
@@ -211,7 +254,7 @@ def create_app(
             )
 
         try:
-            result = transcriber.transcribe_bytes(audio_bytes)
+            result = await run_in_threadpool(transcriber.transcribe_bytes, audio_bytes)
         except (AudioDecodeError, AudioTooLongError, TranscriptionError) as exc:
             raise OpenAIAPIError(
                 status_code=400,

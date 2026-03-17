@@ -14,7 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python -m pip install av fastapi httpx huggingface_hub openvino pytest python-multipart uvicorn
+COPY requirements.txt /tmp/requirements.txt
+
+RUN python -m pip install -r /tmp/requirements.txt
 
 WORKDIR /app
 

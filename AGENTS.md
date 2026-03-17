@@ -10,7 +10,7 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 
 - Host target: mini PC with `Intel i5-9500T`, `15 GiB RAM`, `~399 GiB` free disk
 - Model: `FluidInference/parakeet-tdt-0.6b-v3-ov`
-- Client: `OpenWhispr`
+- Tested clients: `OpenWhispr`, `AudioWhisper`
 - API shape: OpenAI-compatible `POST /v1/audio/transcriptions`
 - Model alias for compatibility: `whisper-1`
 - Network plan: LAN first, remote access later
@@ -56,6 +56,7 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 - Base URL for OpenWhispr custom transcription should be `http://<host>:<port>/v1`
 - Primary endpoint is `POST /v1/audio/transcriptions`
 - Request fields aligned to OpenWhispr's custom endpoint flow: `file`, `model`, optional `language`, optional `prompt`
+- `model` must match the compatibility alias exposed by `GET /v1/models`, which defaults to `whisper-1`
 - Response shape is JSON with a top-level `text`
 - `GET /v1/models` exposes `whisper-1` for compatibility
 - If `API_KEY` is set, send it as `Authorization: Bearer <key>`
@@ -64,6 +65,7 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 
 - `scripts/transcribe_file.py` and the v0 API both use the same short-audio path right now
 - They support short audio only for now: up to `240000` samples after decode/resampling, which is about `15` seconds at `16kHz` mono
+- API uploads are also capped by `MAX_UPLOAD_BYTES`, which defaults to `16777216` bytes
 - Long-audio chunking comes later
 
 ## Current Runtime Notes

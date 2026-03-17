@@ -81,6 +81,14 @@ def should_trim_silence() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def format_audio_too_long_message(sample_count: int, max_samples: int = MAX_PREPROCESSOR_SAMPLES) -> str:
+    max_seconds = max_samples / SAMPLE_RATE
+    return (
+        f"audio is too long for the current short-audio path "
+        f"({sample_count} samples, max {max_samples} / {max_seconds:.1f}s)"
+    )
+
+
 def _is_wav_bytes(audio_bytes: bytes) -> bool:
     return len(audio_bytes) >= 12 and audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE"
 
@@ -132,7 +140,6 @@ def load_audio_from_wav_bytes(audio_bytes: bytes) -> np.ndarray:
             sample_width = wav_file.getsampwidth()
             sample_rate = wav_file.getframerate()
             frame_count = wav_file.getnframes()
-            frames = wav_file.readframes(frame_count)
     except (wave.Error, EOFError) as exc:
         raise AudioDecodeError(f"failed to parse WAV audio: {exc}") from exc
 
@@ -140,6 +147,16 @@ def load_audio_from_wav_bytes(audio_bytes: bytes) -> np.ndarray:
         raise AudioDecodeError("WAV file has no channels")
     if sample_rate <= 0:
         raise AudioDecodeError("WAV file has an invalid sample rate")
+
+    estimated_samples = int(np.ceil(frame_count * SAMPLE_RATE / sample_rate))
+    if estimated_samples > MAX_PREPROCESSOR_SAMPLES:
+        raise AudioTooLongError(format_audio_too_long_message(estimated_samples))
+
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+            frames = wav_file.readframes(frame_count)
+    except (wave.Error, EOFError) as exc:
+        raise AudioDecodeError(f"failed to parse WAV audio: {exc}") from exc
 
     audio = _decode_pcm_samples(frames, sample_width)
     if channels > 1:
@@ -180,18 +197,25 @@ def _load_audio_from_pyav_input(source: str | io.BytesIO) -> np.ndarray:
 
             resampler = av.audio.resampler.AudioResampler(format="fltp", layout="mono", rate=SAMPLE_RATE)
             chunks: list[np.ndarray] = []
+            total_samples = 0
 
             for frame in container.decode(audio=audio_stream.index):
                 for resampled_frame in _iter_resampled_frames(resampler.resample(frame)):
                     chunk = _normalize_pyav_audio(resampled_frame)
                     if chunk.size > 0:
+                        total_samples += chunk.size
+                        if total_samples > MAX_PREPROCESSOR_SAMPLES:
+                            raise AudioTooLongError(format_audio_too_long_message(total_samples))
                         chunks.append(chunk)
 
             for resampled_frame in _iter_resampled_frames(resampler.resample(None)):
                 chunk = _normalize_pyav_audio(resampled_frame)
                 if chunk.size > 0:
+                    total_samples += chunk.size
+                    if total_samples > MAX_PREPROCESSOR_SAMPLES:
+                        raise AudioTooLongError(format_audio_too_long_message(total_samples))
                     chunks.append(chunk)
-    except AudioDecodeError:
+    except (AudioDecodeError, AudioTooLongError):
         raise
     except Exception as exc:
         raise AudioDecodeError(f"PyAV failed to decode audio: {exc}") from exc
@@ -344,11 +368,7 @@ def create_infer_bundle(loaded: LoadedParakeet) -> InferBundle:
 
 def transcribe_short_audio(bundle: InferBundle, audio: np.ndarray, max_tokens: int) -> str:
     if audio.size > MAX_PREPROCESSOR_SAMPLES:
-        max_seconds = MAX_PREPROCESSOR_SAMPLES / 16000.0
-        raise AudioTooLongError(
-            f"audio is too long for the current short-audio path "
-            f"({audio.size} samples, max {MAX_PREPROCESSOR_SAMPLES} / {max_seconds:.1f}s)"
-        )
+        raise AudioTooLongError(format_audio_too_long_message(audio.size))
 
     signal = np.zeros((1, MAX_PREPROCESSOR_SAMPLES), dtype=np.float32)
     signal[0, : audio.size] = audio
