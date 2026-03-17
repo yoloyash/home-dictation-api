@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Protocol
 
@@ -46,12 +47,31 @@ def get_public_model_name() -> str:
     return os.environ.get("PUBLIC_MODEL_NAME", "whisper-1")
 
 
+def should_preload_model() -> bool:
+    value = os.environ.get("PRELOAD_MODEL", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
 def create_app(
     *,
     transcriber: TranscriberProtocol | None = None,
     api_key: str | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="home-dictation-api", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if should_preload_model():
+            current = app.state.transcriber
+            if current is None:
+                current = build_default_transcriber()
+                app.state.transcriber = current
+
+            load = getattr(current, "load", None)
+            if callable(load):
+                load()
+
+        yield
+
+    app = FastAPI(title="home-dictation-api", version="0.1.0", lifespan=lifespan)
     app.state.transcriber = transcriber
     app.state.api_key = api_key
 
@@ -119,7 +139,15 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/readyz")
-    async def readyz() -> dict[str, str]:
+    async def readyz(request: Request):
+        current = request.app.state.transcriber
+        if current is None:
+            return JSONResponse(status_code=503, content={"status": "starting"})
+
+        is_loaded = getattr(current, "is_loaded", None)
+        if is_loaded is False:
+            return JSONResponse(status_code=503, content={"status": "starting"})
+
         return {"status": "ok"}
 
     @app.get("/v1/models")

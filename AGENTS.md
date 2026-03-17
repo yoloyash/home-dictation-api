@@ -35,15 +35,16 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 - Keep the repo minimal
 - Prefer direct, readable code over premature architecture
 - Use `docker compose` for local development
+- Keep the container self-contained so it can drop into an existing homelab stack
 - Update `AGENTS.md` if the direction or setup changes
 - Do not rely on `README.md` for current setup notes
 
 ## Current Dev Commands
 
-- `cp .env.example .env`
-- `docker compose build`
-- `docker compose up`
+- `docker compose up -d --build`
+- `docker compose logs -f dev`
 - `curl http://localhost:8080/healthz`
+- `curl http://localhost:8080/readyz`
 - `curl http://localhost:8080/v1/models`
 - `curl -X POST http://localhost:8080/v1/audio/transcriptions -F file=@/tmp/sample.wav -F model=whisper-1`
 - `docker compose run --rm dev python -c "from openvino import Core; print(Core().available_devices)"`
@@ -64,3 +65,9 @@ Build a self-hosted home-lab dictation API with an OpenAI-style transcription en
 - `scripts/transcribe_file.py` and the v0 API both use the same short-audio path right now
 - They support short audio only for now: up to `240000` samples after decode/resampling, which is about `15` seconds at `16kHz` mono
 - Long-audio chunking comes later
+
+## Current Runtime Notes
+
+- The container bootstraps the model on first start before launching the API
+- `PRELOAD_MODEL=1` is the default so the model is compiled at startup instead of on the first transcription request
+- Persistent data lives in the `hf-cache` and `model-store` volumes

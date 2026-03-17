@@ -1,30 +1,42 @@
 # Home Dictation API
 
-Self-hosted dictation server with an OpenAI-style transcription API for devices around the house.
+A self-hosted, CPU-friendly dictation service for your home lab. It runs entirely on your local server and exposes an OpenAI-compatible transcription API, making it easy to plug into existing clients across your entire network.
 
-## Current Direction
+## Quick Start
 
-- Host: mini PC with `Intel i5-9500T`, `15 GiB RAM`, `~399 GiB` free disk
-- Model: `FluidInference/parakeet-tdt-0.6b-v3-ov`
-- Client: `OpenWhispr`
-- API shape: OpenAI-compatible `/v1/audio/transcriptions`
-- Deploy first on LAN, later behind `api.<domain>` for remote access
-- First client targets: macOS and Windows
+Create a `compose.yaml` file on your server:
 
-## Docker Dev Runtime
+```yaml
+services:
+  dictation-api:
+    image: yashkh03/home-dictation-api:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /srv/home-dictation-api/hf-cache:/opt/hf-cache
+      - /srv/home-dictation-api/models:/opt/models
+```
 
-The first milestone is a reproducible container runtime, not the API itself.
+Then start the service:
 
-- Base image: `python:3.11-slim-bookworm`
-- Runtime: `openvino` from PyPI
-- System deps: `ffmpeg` only
-- Persistent data: named volumes for Hugging Face cache and model storage
+```bash
+docker compose up -d
+```
 
-Quick start:
+> **Note:** The first boot downloads the model. Give it a few minutes for the server to report healthy.
 
-1. `cp .env.example .env`
-2. `docker compose build`
-3. `docker compose up -d`
-4. `docker compose run --rm dev python -c "from openvino import Core; print(Core().available_devices)"`
+## OpenWhispr
 
-The compose service is intentionally app-less for now. It exists to standardize the runtime before we add model bootstrap or API code.
+- Provider: `Custom`
+- Endpoint URL: `http://<server-ip>:8080/v1`
+- API Key: leave blank
+- Model: `whisper-1`
+
+![OpenWhispr custom setup](assets/openwhispr-custom-setup.png)
+
+## Notes
+
+- Endpoint: `http://<server-ip>:8080/v1`
+- Short dictation clips only for now, about `15` seconds max
+- Batch transcription only

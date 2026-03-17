@@ -496,6 +496,10 @@ class ParakeetTranscriber:
     def model_load_seconds(self) -> float:
         return self._load_seconds
 
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded is not None
+
     def load(self) -> LoadedParakeet:
         if self._loaded is not None:
             return self._loaded

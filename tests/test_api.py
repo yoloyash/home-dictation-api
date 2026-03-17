@@ -25,6 +25,17 @@ class StubTranscriber:
         )
 
 
+class PreloadStubTranscriber(StubTranscriber):
+    def __init__(self) -> None:
+        super().__init__()
+        self.load_calls = 0
+        self.is_loaded = False
+
+    def load(self) -> None:
+        self.load_calls += 1
+        self.is_loaded = True
+
+
 def test_transcriptions_json_response() -> None:
     transcriber = StubTranscriber(text="test transcript")
     client = TestClient(create_app(transcriber=transcriber, api_key="test-key"))
@@ -90,3 +101,15 @@ def test_transcriptions_return_openai_error_shape_for_bad_audio() -> None:
             "code": None,
         }
     }
+
+
+def test_app_preloads_transcriber_on_startup(monkeypatch) -> None:
+    monkeypatch.setenv("PRELOAD_MODEL", "1")
+    transcriber = PreloadStubTranscriber()
+
+    with TestClient(create_app(transcriber=transcriber, api_key="test-key")) as client:
+        response = client.get("/readyz")
+
+    assert transcriber.load_calls == 1
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
